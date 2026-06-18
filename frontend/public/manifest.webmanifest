@@ -1,0 +1,24 @@
+{
+  "name": "TubeSprint Downloader",
+  "short_name": "TubeSprint",
+  "description": "Analyze and download video/audio formats from YouTube links.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffe7c8",
+  "theme_color": "#d7552e",
+  "icons": [
+    {
+      "src": "/pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

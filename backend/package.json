@@ -1,0 +1,19 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "YouTube downloader backend API",
+  "main": "server.js",
+  "scripts": {
+    "start": "python server.py",
+    "dev": "python server.py"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "yt-dlp-exec": "^1.0.2"
+  }
+}

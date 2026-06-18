@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      - FRONTEND_ORIGIN=http://localhost:5175
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - backend
+    ports:
+      - "5175:5175"
+    environment:
+      - VITE_API_BASE=/api
+      - CHOKIDAR_USEPOLLING=true
+    restart: unless-stopped

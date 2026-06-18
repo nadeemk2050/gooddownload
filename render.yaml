@@ -3,12 +3,10 @@ services:
     name: naddownload
     env: python
     buildCommand: |
-      pip install -r backend/requirements.txt
-      cd frontend && npm install && npm run build
+      pip install -r requirements.txt
+      cd frontend && npm ci && npm run build
     startCommand: cd backend && gunicorn server:app --worker-class gevent --bind 0.0.0.0:$PORT --timeout 120 --workers 2
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
-      - key: PORT
-        value: 10000
     healthCheckPath: /api/health

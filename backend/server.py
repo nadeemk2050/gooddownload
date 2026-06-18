@@ -15,6 +15,20 @@ backend_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(backend_dir)
 static_dir = os.path.join(project_root, 'frontend', 'dist')
 
+# Auto-build frontend if dist doesn't exist (e.g. fresh deploy on Render)
+if not os.path.exists(static_dir):
+    print("Frontend dist not found. Building frontend...")
+    frontend_dir = os.path.join(project_root, 'frontend')
+    npm_install = subprocess.run(['npm', 'install', '--prefix', frontend_dir], capture_output=True, text=True, cwd=frontend_dir)
+    if npm_install.returncode != 0:
+        print(f"npm install failed: {npm_install.stderr}")
+    else:
+        npm_build = subprocess.run(['npm', 'run', 'build', '--prefix', frontend_dir], capture_output=True, text=True, cwd=frontend_dir)
+        if npm_build.returncode != 0:
+            print(f"npm build failed: {npm_build.stderr}")
+        else:
+            print("Frontend built successfully.")
+
 app = Flask(__name__, static_folder=static_dir, static_url_path='/')
 CORS(app)
 

@@ -67,6 +67,13 @@ def get_base_ydl_opts():
         'nocheckcertificate': True,
         'noplaylist': True,
         'cachedir': os.path.join(tempfile.gettempdir(), 'yt-dlp-cache'),
+        # Use the TV client to bypass bot-detection on cloud/server IPs
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['tv', 'web'],
+                'player_skip': ['webpage'],
+            }
+        },
     }
     if os.path.exists(cookies_path):
         opts['cookiefile'] = cookies_path
@@ -266,7 +273,8 @@ def download():
         '--format', itag,
         '--output', '-',
         '--quiet',
-        '--no-warnings'
+        '--no-warnings',
+        '--extractor-args', 'youtube:player_client=tv,web'
     ]
     if os.path.exists(cookies_path):
         cmd.extend(['--cookies', cookies_path])
@@ -281,6 +289,63 @@ def download():
             proc.kill()
             
     return Response(generate(), headers={"Content-Disposition": "attachment"})
+
+@app.route('/api/stream-download')
+def stream_download():
+    """Stream video/audio directly to the user's browser as a file download.
+    This works on Render — no files saved on the server.
+    """
+    url = request.args.get('url')
+    itag = request.args.get('itag', '')
+    file_name = request.args.get('fileName', 'download')
+    type_ = request.args.get('type', 'video')
+    
+    if not url:
+        return "Missing url", 400
+
+    if type_ == 'audio':
+        fmt = f"{itag}/ba/b" if itag and itag != 'bestaudio' else 'ba[ext=m4a]/ba/b'
+    else:
+        # For video-only streams, merge with best audio
+        fmt = f"{itag}+ba/bv+ba/b" if itag else 'bv+ba/b'
+
+    cmd = [
+        'yt-dlp',
+        '--format', fmt,
+        '--output', '-',
+        '--quiet',
+        '--no-warnings',
+        '--extractor-args', 'youtube:player_client=tv,web'
+    ]
+    if os.path.exists(cookies_path):
+        cmd.extend(['--cookies', cookies_path])
+    cmd.append(url)
+
+    # Guess content type
+    ext = os.path.splitext(file_name)[1].lower()
+    content_type_map = {
+        '.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
+        '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg', '.opus': 'audio/ogg'
+    }
+    content_type = content_type_map.get(ext, 'application/octet-stream')
+
+    def generate():
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            for chunk in iter(lambda: proc.stdout.read(8192), b""):
+                yield chunk
+        finally:
+            proc.kill()
+
+    safe_name = file_name.replace('"', '')
+    return Response(
+        generate(),
+        headers={
+            'Content-Type': content_type,
+            'Content-Disposition': f'attachment; filename="{safe_name}"',
+            'X-Accel-Buffering': 'no',
+        }
+    )
 
 @app.route('/api/settings', methods=['GET'])
 def get_settings():

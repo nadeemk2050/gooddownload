@@ -60,6 +60,10 @@ function App() {
     typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches,
   );
 
+  // True when running on a remote server (Render), not localhost
+  const isRemote = typeof window !== 'undefined' &&
+    !['localhost', '127.0.0.1'].includes(window.location.hostname);
+
   const [progress, setProgress] = useState(null);
   const [history, setHistory] = useState(() => loadHistory());
   const [showHistory, setShowHistory] = useState(false);
@@ -181,35 +185,62 @@ function App() {
 
   async function handleDownload(format) {
     setStatusMessage('');
-    setProgress({ percent: -1, fileName: 'Starting...' });
+    setProgress({ percent: -1, fileName: 'Preparing download...' });
     const downloadKey = format.isBestAudio ? `best-${format.container}` : `${activeTab}-${format.itag}`;
     setDownloadingKey(downloadKey);
 
     let safeTitle = sanitizeFileName(data?.title || 'media');
-    // Remove existing extensions if any (like .mp4 at the end of the title)
     safeTitle = safeTitle.replace(/\.(mp4|m4a|webm|mp3)$/i, '');
 
-    const fileName = format.isBestAudio 
-          ? `${safeTitle}.${format.container}`
-          : `${safeTitle} [${format.qualityLabel}].${format.container}`;
-
     const isAudioType = activeTab === 'audio' || activeTab === 'best-audio';
+    const ext = format.isBestAudio ? format.container
+      : (isAudioType ? (format.container || 'm4a') : (format.container || 'mp4'));
+    const fileName = format.isBestAudio
+      ? `${safeTitle}.${ext}`
+      : `${safeTitle} [${format.qualityLabel}].${ext}`;
 
-    try {
-      const res = await fetch(`${apiUrl('/download-to-local')}?url=${encodeURIComponent(data.url)}&itag=${format.itag || ''}&fileName=${encodeURIComponent(fileName)}&type=${isAudioType ? 'audio' : 'video'}`);
-      
-      if (res.ok) {
+    if (isRemote) {
+      // On Render: stream directly to browser download
+      try {
+        const params = new URLSearchParams({
+          url: data.url,
+          itag: format.itag || '',
+          fileName,
+          type: isAudioType ? 'audio' : 'video',
+        });
+        const downloadUrl = `${apiUrl('/stream-download')}?${params}`;
+        // Trigger browser download via hidden anchor
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setStatusMessage('Download started — check your browser Downloads folder!');
         addToHistory({ date: new Date().toLocaleString(), url: data.url, name: fileName, downloaded: 'Yes' });
-        setStatusMessage('Saved to your folder!');
-      } else {
-        const errPayload = await res.json().catch(() => ({}));
-        throw new Error(errPayload.error || 'Download failed');
+      } catch (err) {
+        setStatusMessage('Download failed: ' + (err.message || 'Unknown error'));
+      } finally {
+        setDownloadingKey('');
+        setProgress(null);
       }
-    } catch (err) {
-      setStatusMessage(err.message || 'Download failed.');
-    } finally {
-      setDownloadingKey('');
-      setProgress(null);
+    } else {
+      // On local PC: save to configured local folder via download-to-local
+      try {
+        const res = await fetch(`${apiUrl('/download-to-local')}?url=${encodeURIComponent(data.url)}&itag=${format.itag || ''}&fileName=${encodeURIComponent(fileName)}&type=${isAudioType ? 'audio' : 'video'}`);
+        if (res.ok) {
+          addToHistory({ date: new Date().toLocaleString(), url: data.url, name: fileName, downloaded: 'Yes' });
+          setStatusMessage('Saved to your folder!');
+        } else {
+          const errPayload = await res.json().catch(() => ({}));
+          throw new Error(errPayload.error || 'Download failed');
+        }
+      } catch (err) {
+        setStatusMessage(err.message || 'Download failed.');
+      } finally {
+        setDownloadingKey('');
+        setProgress(null);
+      }
     }
   }
 
@@ -288,26 +319,29 @@ function App() {
           <span className="pill ok">Storage: Reliable</span>
         </div>
 
-        <div className="folder-bar">
-          <div>
-            <p>Download Destination Path:</p>
-            {isPathEditing ? (
-              <input 
-                type="text" 
-                value={backendPath} 
-                onChange={(e) => setBackendPath(e.target.value)} 
-                onBlur={updateBackendPath}
-                autoFocus
-                className="path-input"
-              />
-            ) : (
-              <strong onClick={() => setIsPathEditing(true)} style={{ cursor: 'pointer' }}>{backendPath || 'Loading...'}</strong>
-            )}
+        {/* Only show server path editor on local PC, not on Render */}
+        {!isRemote && (
+          <div className="folder-bar">
+            <div>
+              <p>Download Destination Path:</p>
+              {isPathEditing ? (
+                <input 
+                  type="text" 
+                  value={backendPath} 
+                  onChange={(e) => setBackendPath(e.target.value)} 
+                  onBlur={updateBackendPath}
+                  autoFocus
+                  className="path-input"
+                />
+              ) : (
+                <strong onClick={() => setIsPathEditing(true)} style={{ cursor: 'pointer' }}>{backendPath || 'Loading...'}</strong>
+              )}
+            </div>
+            <button className="secondary" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => setIsPathEditing(!isPathEditing)}>
+              {isPathEditing ? 'Save' : 'Edit Path'}
+            </button>
           </div>
-          <button className="secondary" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => setIsPathEditing(!isPathEditing)}>
-            {isPathEditing ? 'Save' : 'Edit Path'}
-          </button>
-        </div>
+        )}
 
         <form className="analyze-form" onSubmit={handleSearchOrAnalyze}>
           <div className="row">
@@ -372,7 +406,10 @@ function App() {
                   <div className="progress-info">
                     <span className="progress-filename">{progress.fileName}</span>
                     <span className="progress-stats">
-                      {progress.percent >= 0 ? <>Saving directly to disk... <strong>{progress.percent}%</strong></> : <strong>Downloading to local storage...</strong>}
+                      {isRemote
+                        ? <strong>Streaming to your Downloads folder...</strong>
+                        : (progress.percent >= 0 ? <>Saving directly to disk... <strong>{progress.percent}%</strong></> : <strong>Downloading to local storage...</strong>)
+                      }
                     </span>
                   </div>
                   <div className="progress-track">

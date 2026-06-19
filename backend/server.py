@@ -60,19 +60,27 @@ current_settings = load_settings()
 if not os.path.exists(current_settings["downloadDir"]):
     os.makedirs(current_settings["downloadDir"], exist_ok=True)
 
-def get_base_ydl_opts():
+def get_base_ydl_opts(player_client=None):
+    """Build yt-dlp options. player_client overrides the default client list."""
+    # tv_embedded works best on cloud IPs; web_embedded and mweb as fallbacks
+    clients = player_client or ['tv_embedded', 'web_embedded', 'mweb']
     opts = {
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
         'noplaylist': True,
         'cachedir': os.path.join(tempfile.gettempdir(), 'yt-dlp-cache'),
-        # Use the TV client to bypass bot-detection on cloud/server IPs
         'extractor_args': {
             'youtube': {
-                'player_client': ['tv', 'web'],
-                'player_skip': ['webpage'],
+                'player_client': clients,
             }
+        },
+        'http_headers': {
+            'User-Agent': (
+                'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) '
+                'AppleWebKit/538.1 (KHTML, like Gecko) '
+                'Version/6.0 TV Safari/538.1'
+            ),
         },
     }
     if os.path.exists(cookies_path):
@@ -117,67 +125,89 @@ def analyze():
     url = data.get('url')
     if not url:
         return jsonify({"error": "Invalid YouTube URL"}), 400
-    
-    opts = get_base_ydl_opts()
+
+    # Try multiple player clients in order — cloud IPs often get blocked by YouTube
+    # tv_embedded is most reliable on server IPs; fall back progressively
+    client_attempts = [
+        ['tv_embedded'],
+        ['web_embedded'],
+        ['mweb'],
+        ['tv'],
+    ]
+
+    last_error = 'Unknown error'
+    info = None
+
+    for clients in client_attempts:
+        try:
+            opts = get_base_ydl_opts(player_client=clients)
+            opts['quiet'] = False  # surface errors for debugging
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            break  # success — stop trying
+        except Exception as e:
+            last_error = str(e)
+            print(f"[analyze] client={clients} failed: {last_error[:200]}")
+            info = None
+            continue
+
+    if info is None:
+        # All clients failed
+        if 'Sign in' in last_error or 'bot' in last_error.lower():
+            return jsonify({"status": 403, "message": "YouTube requires verification on this server. Try adding cookies.", "detail": last_error}), 403
+        return jsonify({"status": 500, "message": "Failed to analyze video", "detail": last_error}), 500
+
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            
-            is_live = bool(info.get('is_live'))
-            
-            video_temp = []
-            formats = {"video": [], "audio": []}
-            for f in info.get('formats', []):
-                if str(f.get('format_id', '')).startswith('sb'):
-                    continue
-                    
-                has_video = f.get('vcodec') != 'none' and f.get('vcodec') is not None
-                has_audio = f.get('acodec') != 'none' and f.get('acodec') is not None
+        is_live = bool(info.get('is_live'))
+        
+        video_temp = []
+        formats = {"video": [], "audio": []}
+        for f in info.get('formats', []):
+            if str(f.get('format_id', '')).startswith('sb'):
+                continue
                 
-                entry = {
-                    "itag": f.get('format_id'),
-                    "qualityLabel": f.get('format_note') or f.get('resolution') or ('Audio' if not has_video else f"{f.get('height', '')}p"),
-                    "container": f.get('ext', 'mp4'),
-                    "approxSize": f.get('filesize') or f.get('filesize_approx') or 0,
-                    "url": f.get('url'),
-                    "hasVideo": has_video,
-                    "hasAudio": has_audio,
-                    "height": f.get('height', 0)
-                }
-                if has_video:
-                    video_temp.append(entry)
-                elif has_audio:
-                    formats["audio"].append(entry)
-                    
-            # Sort video temp by height (descending) and then prefer mp4
-            video_temp.sort(key=lambda x: (x.get('height') or 0, 1 if x['container'] == 'mp4' else 0), reverse=True)
+            has_video = f.get('vcodec') != 'none' and f.get('vcodec') is not None
+            has_audio = f.get('acodec') != 'none' and f.get('acodec') is not None
             
-            seen_heights = set()
-            for vf in video_temp:
-                h = vf.get('height')
-                if h and h not in seen_heights:
-                    seen_heights.add(h)
-                    vf['qualityLabel'] = f"{h}p"
-                    formats["video"].append(vf)
-            formats["audio"].sort(key=lambda x: x['approxSize'] or 0, reverse=True)
-            
-            return jsonify({
-                "url": url,
-                "title": info.get('title', 'Unknown Title'),
-                "thumbnail": info.get('thumbnail', ''),
-                "duration": info.get('duration', 0),
-                "durationText": info.get('duration_string', '0:00'),
-                "author": info.get('uploader') or info.get('channel') or 'Unknown Author',
-                "isLive": is_live,
-                "formats": formats
-            })
-    except yt_dlp.utils.DownloadError as e:
-        err_msg = str(e)
-        if "Sign in to confirm" in err_msg:
-            return jsonify({"status": 403, "message": "Bot verification required", "detail": err_msg}), 403
-        return jsonify({"status": 500, "message": "Failed to analyze video", "detail": err_msg}), 500
+            entry = {
+                "itag": f.get('format_id'),
+                "qualityLabel": f.get('format_note') or f.get('resolution') or ('Audio' if not has_video else f"{f.get('height', '')}p"),
+                "container": f.get('ext', 'mp4'),
+                "approxSize": f.get('filesize') or f.get('filesize_approx') or 0,
+                "url": f.get('url'),
+                "hasVideo": has_video,
+                "hasAudio": has_audio,
+                "height": f.get('height', 0)
+            }
+            if has_video:
+                video_temp.append(entry)
+            elif has_audio:
+                formats["audio"].append(entry)
+                
+        # Sort video by height descending, prefer mp4
+        video_temp.sort(key=lambda x: (x.get('height') or 0, 1 if x['container'] == 'mp4' else 0), reverse=True)
+        
+        seen_heights = set()
+        for vf in video_temp:
+            h = vf.get('height')
+            if h and h not in seen_heights:
+                seen_heights.add(h)
+                vf['qualityLabel'] = f"{h}p"
+                formats["video"].append(vf)
+        formats["audio"].sort(key=lambda x: x['approxSize'] or 0, reverse=True)
+        
+        return jsonify({
+            "url": url,
+            "title": info.get('title', 'Unknown Title'),
+            "thumbnail": info.get('thumbnail', ''),
+            "duration": info.get('duration', 0),
+            "durationText": info.get('duration_string', '0:00'),
+            "author": info.get('uploader') or info.get('channel') or 'Unknown Author',
+            "isLive": is_live,
+            "formats": formats
+        })
     except Exception as e:
-        return jsonify({"status": 500, "message": "Failed to analyze video", "detail": str(e)}), 500
+        return jsonify({"status": 500, "message": "Failed to process video info", "detail": str(e)}), 500
 
 @app.route('/api/download-best-audio')
 def download_best_audio():

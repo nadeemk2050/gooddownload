@@ -1,16 +1,14 @@
 services:
   - type: web
-    name: naddownload
+    name: gooddownload
     env: python
     buildCommand: |
-      # Install Node.js for frontend build
-      curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs
-      # Install Python dependencies
       pip install -r requirements.txt
-      # Build frontend
-      npm install --prefix frontend && npm run build --prefix frontend
-    startCommand: cd backend && gunicorn server:app --worker-class gevent --bind 0.0.0.0:$PORT --timeout 120 --workers 2
+      cd frontend && npm install --legacy-peer-deps && npm run build && cd ..
+    startCommand: gunicorn backend.server:app --worker-class gevent --bind 0.0.0.0:$PORT --timeout 120 --workers 2
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: NODE_VERSION
+        value: 20.11.0
     healthCheckPath: /api/health

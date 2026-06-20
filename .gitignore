@@ -37,7 +37,7 @@ Thumbs.db
 
 # Backend runtime data
 backend/settings.json
-backend/cookies.txt
+# backend/cookies.txt
 
 # Large binaries
 *.exe
